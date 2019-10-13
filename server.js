@@ -12,6 +12,26 @@ app.get('/', (req, res) => {
     });
 });
 
+const mongo = require("mongodb").MongoClient;
+const dsn = "mongodb://localhost:27017/chat";
+const collection = "messages";
+
+async function collectionQuery(dsn, colName, type, data) {
+    const client = await mongo.connect(dsn);
+    const db = await client.db();
+    const col = await db.collection(colName);
+    let res;
+    if (type === "add") {
+        res = col.insertOne(data);
+    }
+    else if (type === "get") {
+        res = await col.find().toArray();
+    }
+
+    await client.close();
+    return res;
+}
+
 io.on('connection', (socket) => {
     // register the socket.id in the users object
     users[socket.id] = "";
@@ -19,13 +39,15 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         // free up the username from the chat
         if (users[socket.id] != "") {
-                const data = {
-                        user: users[socket.id],
-                        message: "left the chatroom",
-                        type: "left"
-                };
+            const data = {
+                user: users[socket.id],
+                message: "left the chatroom",
+                type: "left",
+                sent: new Date().getTime()
+            };
 
-                socket.broadcast.emit('server-sends', (data));
+            socket.broadcast.emit('server-sends', (data));
+            collectionQuery(dsn, collection, "add", data);
         }
         delete users[socket.id];
     });
@@ -46,6 +68,7 @@ io.on('connection', (socket) => {
             data.message = "joined the chatroom";
             data.type = "join";
             io.emit('server-sends', (data));
+            collectionQuery(dsn, collection, "add", data);
             // bind username to socket.id
             users[socket.id] = data.user;
         }
@@ -53,6 +76,15 @@ io.on('connection', (socket) => {
 
     socket.on('client-sends', (data) => {
         socket.broadcast.emit('server-sends', (data));
+        collectionQuery(dsn, collection, "add", data);
+    });
+
+    socket.on('get-messages', () => {
+        (() => {
+            collectionQuery(dsn, collection, "get")
+                .then(res => io.to(`${socket.id}`).emit("all-messages", res))
+                .catch(err => console.log(err));
+        })();
     });
 });
 
